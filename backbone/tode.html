@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html>
+
+	<head>
+		<meta charset="UTF-8">
+		<title></title>
+		<link rel="stylesheet" type="text/css" href="todos.css"/>
+	</head>
+
+	<body>
+		<script type="text/template" id="search_template">
+			<label><%=search_label%></label>
+			<input type="text" id="search_input" />
+			<input type="button" id="search_button" value="Search" />
+		</script>
+		<script type="text/template" id="item-template">
+			<div class="todo <%= done ? 'done' : '' %>">
+				<div class="display">
+					<input class="check" type="checkbox" <%=done? 'checked="checked"': ''%>/>
+					<label class="todo-content">
+							<%=content%>
+							</label>
+					<span class="todo-destroy">
+								</span>
+				</div>
+				<div class="edit">
+					<input class="todo-input" type="text" value="<%= content %>" />
+				</div>
+			</div>
+		</script>
+
+		<script type="text/template" id="stats-template">
+			<%if(total){%>
+			<span class="todo-count">
+				<span class="number">
+					<%=remaining%>
+					</span>
+			<span class="word">
+						<%=remaining==1?'item':'items'%>
+						</span>left.
+			</span>
+			<%}%>
+			<%if(done){%>
+			<span class="todo-clear">
+							<a href="#">
+								Clear
+								<span class="number-done">
+									<%=done%>
+									</span> completed
+			<span class="word-done">
+										<%=done==1?'item':'items'%>
+										</span>
+			</a>
+			</span>
+			<%}%>
+		</script>
+	</body>
+	<script src="jquery.min.js" type="text/javascript" charset="utf-8"></script>
+	<script src="underscore-min.js" type="text/javascript" charset="utf-8"></script>
+	<script src="backbone-min.js" type="text/javascript" charset="utf-8"></script>
+	<script src="backbone.localStorage.js" type="text/javascript" charset="utf-8"></script>
+	<script type="text/javascript">
+		var Todo = Backbone.Model.extend({
+			defaults: {
+				content: "empty todo...",
+				done: false
+			},
+			initialize: function() {
+				// 确保每一个item都不为空
+				if(!this.get("content")) {
+					this.set({
+						"content": this.defaults.content
+					});
+				}
+			},
+			toggle: function() {
+				// 改变 一个任务的状态
+				this.save({
+					done: !this.get("done")
+				});
+			},
+			clear: function() {
+				// 从 localStorage 中删除一个条目
+				this.destroy();
+			}
+		});
+
+		var TodoList = Backbone.Collection.extend({
+			model: Todo,
+			localStorage: new Store("todos-backbone"),
+			done: function() {
+				// 获取所有已经完成的任务数组
+				// this.filter 是underscore的内置函数
+				// 作用是便利当前对象,
+				// 然后过滤出对象中指定内容为true的对象
+				// 并将这些对象放到数组中
+				return this.filter(function(todo) {
+					return todo.get("done");
+				});
+			},
+			remaining: function() {
+				// 获取任务列表中未完成的任务数组
+				// without 也是underscore里面的函数
+				// apply是js的内置函数  作用是把当前的上下文传入到函数中
+				// 意思: 从this中,排除已经完成的任务,返回数组
+				return this.without.apply(this, this.done());
+			},
+			nextOrder: function() {
+				// 获得下一个任务的排序序号 , 
+				// 通过数据库中的记录数 +1 实现
+				if(!this.length) {
+					return 1;
+				}
+				return this.last().get("order") + 1;
+			},
+			comparator: function(todo) {
+				// Backbone 的内置函数
+				// 根据todo对象的加入顺序进行排列
+				return todo.get("order");
+			}
+		});
+
+		// 创建一个全局的 todo 的 collection 对象
+		var Todos = new TodoList();
+
+		// TodoView : 作用是控制任务列表
+		var TodoView = Backbone.View.extend({
+			tagName: "li",
+			template: _.template($("#item-template").html()),
+			events: {
+				"click .chech": "toggleDone",
+				"dblclick label.todo-content": "edit",
+				"click span.todo-destroy": "clear",
+				"keypress .todo-input": "updateOnEnter",
+				"blur .todo-input": "close"
+			},
+			initialize: function() {
+				// 初始化 , 设置 todoview 和 todo 的一对一引用
+				// 这里 我们可以把 todoview 看做是 todo 在界面的映射
+				_.bindAll(this, "render", "close", "remove");
+				this.model.bind("change", this.render);
+				this.model.bind("destroy", this.remove);
+			},
+			render: function() {
+				// 渲染 todo 中的数据 到 item-template 中
+				// 然后返回对自己的引用 this
+				$(this.el).html(this.template(this.model.toJSON()));
+				this.input = this.$(".todo-input");
+				return this;
+			},
+			toggleDone: function() {
+				// 控制任务完成或未完成
+				this.model.toggle();
+			},
+			edit: function() {
+				// 修改任务条目的样式
+				$(this.el).addClass("editing");
+				this.input.focus();
+			},
+			close: function() {
+				// 关闭编辑界面 , 并把修改的内容同步到界面
+				this.model.save({
+					content: this.input.val()
+				}); // 会触发change事件
+				$(this.el).removeClass("editing");
+			},
+			updateOnEnter: function(e) {
+				// 按下回车键之后 , 关闭界面
+				if(e.keyCode == 13) {
+					this.close();
+				}
+			},
+			clear: function() {
+				// 移除对应条目 , 以及对应的数据独享
+				this.model.clear();
+			}
+		});
+
+		// AppView
+		// 功能是显示所有任务列表 , 显示整体列表状态
+		// 如完成多少 , 未完成多少
+		// 以及任务的添加 , 主要是整体上的一个控制
+		var AppView = Backbone.View.extend({
+			el: $("#todoapp"),
+			statsTemplate: _.template($("#stats-template").html()),
+			events: {
+				"keypress #new-todo": "createOnEnter",
+				"keyup #new-todo": "showTooltip",
+				"click .todo-cliar a": "clearComplete",
+				"click .mark-all-done": "toggleAllComplete"
+			},
+			initialize: function() {
+				// 在初始化过程中,绑定事件到Todos上,
+				// 当任务列表改变时会触发对应事件.
+				// 最后报存在localStorage中的数据取出来
+				// 下面这个是underscore中的方法,用来绑定方法到目前的这个对象中
+				// 是为了在以后运行环境中调用当前对象的时候能够找到对象中的这些方法
+				_.bindAll(this, "addOne", "addAll", "render", "toggleAllComplete");
+				this.inupt = this.$("#new-todo");
+				this.allCheckbox = this.$(".mark-all-done")[0];
+				Todos.bind("add", this.addOne);
+				Todos.bind("reset", this.addAll);
+				Todos.bind("all", this.render);
+				Todos.fetch();
+			},
+			render: function() {
+				// 更改当前任务列表的状态
+				var done = Todos.done().length;
+				var remaining = Todos.remaining().length;
+				this.$("#todo-stats").html(this.statsTemplate({
+					total: Todos.length,
+					done: done,
+					remaining: remaining
+				}));
+
+				this.allCheckbox.checked = !remaining;
+			},
+			addOne: function(todo) {
+				var view = new TodoView({
+					model: todo
+				});
+				this.$("#todo-list").append(view.render().el);
+			},
+			addAll: function() {
+				Todos.each(this.addOne);
+			},
+			newAttributes: function() {
+				return {
+					content: this.input.val(),
+					order: Todos.nextOrder(),
+					done: false
+				};
+			},
+			createOnEnter: function(e) {
+				if(e.keyCode == 13) {
+					return;
+				}
+				Todos.create(this.newAttributes());
+				this.input.val("");
+			},
+			clearCompleted: function() {
+				_.each(Todos.done(), function(todo) {
+					todo.clear();
+				});
+				return false;
+			},
+			showTooltip: function(e) {
+				var tooltip = this.$(".ui-tooltip-top");
+				var val = this.input.val();
+				tooltip.fadeOut();
+				if(this.tooltipTimeout) clearTimeout(this.tooltipTimeout);
+				if(val == "" || val == this.input.attr("placeholder")) return;
+				var show = function() {
+					tooltip.show().fadeIn();
+				};
+				this.tooltipTimeout = _.delay(show, 1000);
+			},
+			toggleAllComplete: function() {
+				var done = this.allCheckbox.checked;
+				Todos.each(function(todo) {
+					todo.save({
+						"done": done
+					});
+				});
+			}
+		});
+	</script>
+
+</html>
